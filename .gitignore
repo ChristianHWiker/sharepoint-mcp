@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+*.log
+
+# local agent / editor state
+.claude/settings.local.json
+.antigravitycli/
