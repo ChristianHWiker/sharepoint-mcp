@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SharePoint MCP — Codebase Review</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #fafaf7;
+    --text: #1a1a1a;
+    --muted: #6b7280;
+    --accent: #c2410c;
+    --border: #e5e5e2;
+    --card: #ffffff;
+    --code-bg: #f5f5f2;
+    --crit: #dc2626;
+    --warn: #d97706;
+    --info: #0369a1;
+    --ok: #059669;
+  }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono { font-family: "JetBrains Mono", Menlo, Consolas, monospace; }
+
+  header.top {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(250,250,247,0.85); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 32px;
+    display: flex; align-items: baseline; gap: 16px;
+  }
+  header.top .title { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+  header.top .sub { color: var(--muted); font-size: 13px; }
+  header.top .tag {
+    margin-left: auto; font-size: 12px; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 999px; padding: 2px 10px;
+  }
+
+  .layout { display: grid; grid-template-columns: 240px minmax(0,1fr); gap: 0; max-width: 1180px; margin: 0 auto; }
+  nav.toc {
+    position: sticky; top: 64px; align-self: start;
+    height: calc(100vh - 64px); overflow-y: auto;
+    padding: 32px 20px 32px 32px; font-size: 13.5px;
+  }
+  nav.toc a {
+    display: block; color: var(--muted); text-decoration: none;
+    padding: 5px 10px; border-left: 2px solid transparent; border-radius: 0 4px 4px 0;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  nav.toc a:hover { color: var(--text); }
+  nav.toc a.active { color: var(--accent); border-left-color: var(--accent); background: rgba(194,65,12,0.05); font-weight: 550; }
+
+  main { padding: 40px 48px 120px; min-width: 0; }
+  section { margin-bottom: 64px; scroll-margin-top: 80px; }
+  h1 { font-size: 30px; letter-spacing: -0.02em; margin-bottom: 8px; }
+  h2 { font-size: 21px; letter-spacing: -0.015em; margin-bottom: 18px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  p { margin-bottom: 14px; max-width: 720px; }
+  .lede { font-size: 17px; color: #2a2a2a; max-width: 720px; }
+  a.inline { color: var(--accent); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 24px 0; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .stat .n { font-size: 26px; font-weight: 650; letter-spacing: -0.02em; }
+  .stat .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+  .figure { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin: 22px 0; overflow-x: auto; }
+  .figure .cap { font-size: 12.5px; color: var(--muted); margin-top: 14px; text-align: center; }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+  td code { font-size: 12.5px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+  .callout { border-left: 3px solid var(--accent); background: rgba(194,65,12,0.04); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 18px 0; max-width: 720px; }
+  .callout .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  .callout.info { border-left-color: var(--info); background: rgba(3,105,161,0.04); } .callout.info .lbl { color: var(--info); }
+  .callout p { margin: 0; }
+
+  .codeblock { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 14px 0; max-width: 760px; }
+  .codeblock .bar { background: var(--code-bg); border-bottom: 1px solid var(--border); padding: 6px 12px; font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+  .codeblock pre { padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55; background: var(--card); }
+  .codeblock .cm { color: var(--muted); }
+  .codeblock .kw { color: #7c3aed; }
+  .codeblock .st { color: #047857; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 9px 3px 7px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .pill.warn .dot { background: var(--warn); } .pill.info .dot { background: var(--info); } .pill.ok .dot { background: var(--ok); } .pill.crit .dot { background: var(--crit); }
+
+  .concern { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 14px 0; max-width: 760px; }
+  .concern .hd { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .concern .hd h3 { margin: 0; font-size: 15px; }
+  .concern .ref { font-size: 12px; color: var(--muted); }
+  .concern p { margin: 4px 0 0; font-size: 14.5px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .card h3 { margin-top: 0; }
+  .card p { font-size: 14px; margin-bottom: 0; }
+  ul.tight { margin: 8px 0 14px 22px; } ul.tight li { margin-bottom: 5px; max-width: 700px; }
+
+  @media (max-width: 880px) {
+    .layout { grid-template-columns: 1fr; } nav.toc { display: none; }
+    .stats { grid-template-columns: repeat(2,1fr); } .grid2 { grid-template-columns: 1fr; } main { padding: 32px 24px 80px; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="title">SharePoint MCP</span>
+  <span class="sub">Codebase &amp; Architecture Review</span>
+  <span class="tag">v0.1.0</span>
+</header>
+
+<div class="layout">
+  <nav class="toc" id="toc">
+    <a href="#overview">Overview</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#modules">Module map</a>
+    <a href="#keyfiles">Key files</a>
+    <a href="#pages">Page authoring</a>
+    <a href="#strengths">Strengths</a>
+    <a href="#concerns">Concerns</a>
+    <a href="#recommendations">Recommendations</a>
+  </nav>
+
+  <main>
+    <section id="overview">
+      <h1>SharePoint MCP — Codebase Review</h1>
+      <p class="lede">An MCP server that exposes a SharePoint Online tenant to LLM clients over stdio. It is a thin, uniform layer of Microsoft Graph wrappers, with one deliberate exception: modern-page authoring drops to the SharePoint REST API because Graph cannot create the web parts that matter.</p>
+
+      <div class="stats">
+        <div class="stat"><div class="n">~2,876</div><div class="l">lines of TypeScript</div></div>
+        <div class="stat"><div class="n">13</div><div class="l">source files</div></div>
+        <div class="stat"><div class="n">~80+</div><div class="l">MCP tools, 9 modules</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">unit tests (1 smoke script)</div></div>
+      </div>
+
+      <p><strong>Stack.</strong> Node 22+ / TypeScript (ESM), <code>@modelcontextprotocol/sdk</code> over <code>StdioServerTransport</code>, <code>@microsoft/microsoft-graph-client</code>, <code>@azure/msal-node</code> for auth, <code>zod</code> for input schemas. Builds with <code>tsc</code> to <code>dist/</code>. No runtime framework beyond the SDK.</p>
+
+      <div class="callout">
+        <div class="lbl">TL;DR</div>
+        <p>Clean, consistent, easy to extend — every tool follows the same <code>registerTool → wrapTool → graphClient</code> shape. The standout engineering is in <code>pages.ts</code>, which works around a hard Graph limitation via SharePoint REST <code>CanvasContent1</code> and seeds web-part properties from the live site manifest. Main gaps: no automated tests and reliance on Graph <em>beta</em> endpoints in a few tools.</p>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <h2>Architecture</h2>
+      <p>A single stdio process. <code>index.ts</code> boots the MCP server and registers nine tool modules. Most tools call Microsoft Graph through one shared client; page authoring takes a second path to the SharePoint REST API. Both paths get their tokens from the same MSAL-backed auth module.</p>
+
+      <div class="figure">
+        <svg viewBox="0 0 860 430" width="100%" role="img" aria-label="Architecture diagram">
+          <defs>
+            <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9ca3af"/></marker>
+            <style>
+              .box{fill:#fff;stroke:#e5e5e2;stroke-width:1.5;rx:9;}
+              .lbl{font:600 13px -apple-system,Segoe UI,sans-serif;fill:#1a1a1a;}
+              .sm{font:11px "JetBrains Mono",Consolas,monospace;fill:#6b7280;}
+              .ttl{font:600 11px -apple-system,sans-serif;fill:#6b7280;text-transform:uppercase;letter-spacing:.05em;}
+              .ln{stroke:#9ca3af;stroke-width:1.4;fill:none;}
+              .accent{stroke:#c2410c;}
+            </style>
+          </defs>
+
+          <!-- client -->
+          <rect class="box" x="20" y="180" width="150" height="60" rx="9"/>
+          <text class="lbl" x="95" y="206" text-anchor="middle">MCP Client</text>
+          <text class="sm" x="95" y="224" text-anchor="middle">Claude / host</text>
+
+          <!-- stdio -->
+          <line class="ln" x1="170" y1="210" x2="232" y2="210" marker-end="url(#arr)"/>
+          <text class="sm" x="201" y="202" text-anchor="middle">stdio</text>
+
+          <!-- index -->
+          <rect class="box" x="234" y="180" width="150" height="60" rx="9"/>
+          <text class="lbl" x="309" y="202" text-anchor="middle">index.ts</text>
+          <text class="sm" x="309" y="220" text-anchor="middle">McpServer + register</text>
+
+          <!-- tool modules -->
+          <rect class="box" x="234" y="40" width="150" height="92" rx="9"/>
+          <text class="ttl" x="309" y="60" text-anchor="middle">9 tool modules</text>
+          <text class="sm" x="309" y="78" text-anchor="middle">sites · lists · files</text>
+          <text class="sm" x="309" y="94" text-anchor="middle">pages · search · perms</text>
+          <text class="sm" x="309" y="110" text-anchor="middle">contentTypes · taxonomy</text>
+          <text class="sm" x="309" y="126" text-anchor="middle">subscriptions</text>
+          <line class="ln" x1="309" y1="180" x2="309" y2="132" marker-end="url(#arr)"/>
+
+          <!-- util -->
+          <rect class="box" x="60" y="60" width="140" height="52" rx="9"/>
+          <text class="lbl" x="130" y="82" text-anchor="middle">util.ts</text>
+          <text class="sm" x="130" y="99" text-anchor="middle">wrapTool · asJson</text>
+          <line class="ln" x1="234" y1="92" x2="202" y2="90" marker-end="url(#arr)"/>
+
+          <!-- graph backend -->
+          <rect class="box" x="470" y="120" width="170" height="60" rx="9"/>
+          <text class="lbl" x="555" y="142" text-anchor="middle">graph.ts</text>
+          <text class="sm" x="555" y="160" text-anchor="middle">Graph client</text>
+          <line class="ln" x1="384" y1="200" x2="468" y2="165" marker-end="url(#arr)"/>
+          <text class="sm" x="430" y="172" text-anchor="middle">most tools</text>
+
+          <!-- REST backend -->
+          <rect class="box accent" x="470" y="240" width="170" height="64" rx="9" stroke="#c2410c"/>
+          <text class="lbl" x="555" y="262" text-anchor="middle">SharePoint REST</text>
+          <text class="sm" x="555" y="280" text-anchor="middle">_api/sitepages</text>
+          <text class="sm" x="555" y="296" text-anchor="middle">CanvasContent1</text>
+          <line class="ln accent" x1="384" y1="222" x2="468" y2="270" marker-end="url(#arr)" stroke="#c2410c"/>
+          <text class="sm" x="426" y="258" text-anchor="middle" fill="#c2410c">pages.ts</text>
+
+          <!-- graph cloud -->
+          <rect class="box" x="710" y="120" width="120" height="60" rx="9"/>
+          <text class="lbl" x="770" y="146" text-anchor="middle">Microsoft</text>
+          <text class="lbl" x="770" y="163" text-anchor="middle">Graph</text>
+          <line class="ln" x1="640" y1="150" x2="708" y2="150" marker-end="url(#arr)"/>
+
+          <rect class="box" x="710" y="244" width="120" height="56" rx="9"/>
+          <text class="lbl" x="770" y="268" text-anchor="middle">SharePoint</text>
+          <text class="lbl" x="770" y="285" text-anchor="middle">Online</text>
+          <line class="ln accent" x1="640" y1="272" x2="708" y2="272" marker-end="url(#arr)" stroke="#c2410c"/>
+
+          <!-- auth -->
+          <rect class="box" x="470" y="350" width="360" height="56" rx="9"/>
+          <text class="lbl" x="650" y="372" text-anchor="middle">auth.ts — MSAL (delegated device-code / app-only)</text>
+          <text class="sm" x="650" y="390" text-anchor="middle">getAccessToken() → Graph   ·   getSharePointToken() → SP REST</text>
+          <line class="ln" x1="555" y1="350" x2="555" y2="304" marker-end="url(#arr)"/>
+          <line class="ln" x1="600" y1="350" x2="575" y2="182" marker-end="url(#arr)"/>
+        </svg>
+        <div class="cap">Request flow. Two backends, one auth module. The accent path is the page-authoring workaround.</div>
+      </div>
+    </section>
+
+    <section id="modules">
+      <h2>Module map</h2>
+      <table>
+        <thead><tr><th>Path</th><th>LoC</th><th>Purpose</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>index.ts</code></td><td>91</td><td>Entry point: load .env, register modules, stdio transport; <code>auth</code> &amp; <code>--help</code> subcommands</td><td>Clean CLI dispatch</td></tr>
+          <tr><td><code>auth.ts</code></td><td>146</td><td>MSAL delegated (device code, file-cached) and app-only token acquisition; SP-resource tokens</td><td>Dual mode</td></tr>
+          <tr><td><code>graph.ts</code></td><td>14</td><td>Builds the Graph client with the auth provider</td><td>Tiny, shared</td></tr>
+          <tr><td><code>util.ts</code></td><td>44</td><td><code>wrapTool</code> error normalization, <code>asJson</code>/<code>asText</code> result helpers</td><td>Core pattern</td></tr>
+          <tr><td><code>tools/lists.ts</code></td><td>671</td><td>Lists, items, columns, views, item versions</td><td>Largest module</td></tr>
+          <tr><td><code>tools/pages.ts</code></td><td>533</td><td>Modern pages + native web parts via REST CanvasContent1</td><td>Most novel</td></tr>
+          <tr><td><code>tools/files.ts</code></td><td>427</td><td>Drive items, up/download, copy/move, check-in/out, versions, sharing</td><td>—</td></tr>
+          <tr><td><code>tools/sites.ts</code></td><td>383</td><td>Site lookup, drives, site columns, create site, recycle bin</td><td>Uses beta</td></tr>
+          <tr><td><code>tools/taxonomy.ts</code></td><td>144</td><td>Term store groups, sets, terms</td><td>—</td></tr>
+          <tr><td><code>tools/permissions.ts</code></td><td>139</td><td>List/revoke permissions, sharing links</td><td>—</td></tr>
+          <tr><td><code>tools/contentTypes.ts</code></td><td>124</td><td>Content types and their columns</td><td>—</td></tr>
+          <tr><td><code>tools/subscriptions.ts</code></td><td>109</td><td>Graph change webhooks</td><td>—</td></tr>
+          <tr><td><code>tools/search.ts</code></td><td>51</td><td>Tenant search</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="keyfiles">
+      <h2>Key files</h2>
+
+      <h3>The tool pattern (<code>util.ts</code> + every module)</h3>
+      <p>One shape repeats across all 80+ tools: a zod input schema, a handler wrapped by <code>wrapTool</code>, a Graph call, and a JSON result. Errors are normalized once.</p>
+      <div class="codeblock">
+        <div class="bar"><span>src/util.ts</span><span>TypeScript</span></div>
+<pre><span class="kw">export function</span> wrapTool(handler) {
+  <span class="kw">return async</span> (args) =&gt; {
+    <span class="kw">try</span> { <span class="kw">return await</span> handler(args); }
+    <span class="kw">catch</span> (err) {
+      <span class="cm">// GraphError → "status | code | message | requestId"; else generic</span>
+      <span class="kw">return</span> { content: [{ type: <span class="st">"text"</span>, text: formatGraphError(err) }], isError: <span class="kw">true</span> };
+    }
+  };
+}</pre>
+      </div>
+      <p>The payoff is uniformity: adding a tool means writing a schema and one Graph line. The cost is that there's no shared retry, throttling (HTTP 429) handling, or pagination — each tool returns the first page Graph gives it.</p>
+
+      <h3>Auth (<code>auth.ts</code>)</h3>
+      <p>Two modes, chosen by whether <code>AZURE_CLIENT_SECRET</code> is set: delegated device-code (token cached to <code>%APPDATA%\sharepoint-mcp\token-cache.json</code>, refreshed silently) or app-only client credentials. A separate <code>getSharePointToken(hostname)</code> mints a SharePoint-resource token for the REST page path.</p>
+    </section>
+
+    <section id="pages">
+      <h2>Page authoring — the interesting part</h2>
+      <p>Graph's Pages API can create text and simple web parts, but it <strong>rejects any web part whose <code>properties</code> contains an array of objects</strong> — Quick Links being the canonical case. The OData reader fails it regardless of payload shape (no annotation → "resource set without entity set"; <code>Edm.Untyped</code> → a server-side null reference). This is a Graph limitation, not a payload bug.</p>
+
+      <p><code>pages.ts</code> sidesteps it by building the page's <code>CanvasContent1</code> string and posting through the SharePoint REST pages API, then seeding each web part's default <code>properties</code> from the site's live manifest.</p>
+
+      <div class="figure">
+        <svg viewBox="0 0 820 150" width="100%" role="img" aria-label="Page authoring flow">
+          <defs><marker id="arr2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9ca3af"/></marker>
+          <style>.b{fill:#fff;stroke:#e5e5e2;stroke-width:1.5;} .t{font:600 12.5px -apple-system,sans-serif;fill:#1a1a1a;} .s{font:10.5px "JetBrains Mono",monospace;fill:#6b7280;} .l{stroke:#9ca3af;stroke-width:1.4;fill:none;}</style></defs>
+          <rect class="b" x="10" y="50" width="150" height="52" rx="8"/><text class="t" x="85" y="72" text-anchor="middle">sections[]</text><text class="s" x="85" y="89" text-anchor="middle">tool input</text>
+          <line class="l" x1="160" y1="76" x2="196" y2="76" marker-end="url(#arr2)"/>
+          <rect class="b" x="198" y="50" width="172" height="52" rx="8"/><text class="t" x="284" y="71" text-anchor="middle">getManifests()</text><text class="s" x="284" y="88" text-anchor="middle">GetClientSideWebParts</text>
+          <line class="l" x1="370" y1="76" x2="406" y2="76" marker-end="url(#arr2)"/>
+          <rect class="b" x="408" y="50" width="180" height="52" rx="8"/><text class="t" x="498" y="71" text-anchor="middle">buildCanvasContent1</text><text class="s" x="498" y="88" text-anchor="middle">defaults + overrides</text>
+          <line class="l" x1="588" y1="76" x2="624" y2="76" marker-end="url(#arr2)"/>
+          <rect class="b" x="626" y="50" width="184" height="52" rx="8" stroke="#c2410c"/><text class="t" x="718" y="71" text-anchor="middle">SavePageAsDraft</text><text class="s" x="718" y="88" text-anchor="middle">_api/sitepages</text>
+        </svg>
+        <div class="cap">create_page / update_page pipeline. Manifest seeding means schemas aren't hand-maintained.</div>
+      </div>
+
+      <table>
+        <thead><tr><th>Detail</th><th>Why it matters</th></tr></thead>
+        <tbody>
+          <tr><td>Button label/url go in <code>serverProcessedContent</code>, not <code>properties</code></td><td>Putting them in properties renders a blank button — a non-obvious trap the code now gets right</td></tr>
+          <tr><td><code>update_page</code> calls <code>checkoutpage</code> before save</td><td>SharePoint 409s ("editing session ended") without an active checkout</td></tr>
+          <tr><td>Manifest defaults merged under per-kind overrides</td><td>Quick Links gets real <code>layoutId</code>/<code>isMigrated</code> instead of guessed keys; hand-coded values remain as fallback</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="strengths">
+      <h2>Strengths</h2>
+      <div class="grid2">
+        <div class="card"><h3>Uniform, low-friction pattern</h3><p>Every tool is schema + <code>wrapTool</code> + one Graph call. Predictable to read, trivial to extend, hard to get subtly wrong.</p></div>
+        <div class="card"><h3>Centralized error shaping</h3><p><code>formatGraphError</code> surfaces status, code, and <code>requestId</code> — exactly what you need to debug Graph 4xx, returned as <code>isError</code> tool results rather than crashes.</p></div>
+        <div class="card"><h3>Pragmatic dual backend</h3><p>Graph where it works; SharePoint REST where it must. The page-authoring path solves a real problem most SharePoint tooling punts on.</p></div>
+        <div class="card"><h3>Sensible auth + docs</h3><p>Delegated and app-only modes with token caching, plus a real <code>README</code>, <code>SETUP.md</code>, and a live end-to-end smoke script.</p></div>
+      </div>
+    </section>
+
+    <section id="concerns">
+      <h2>Concerns</h2>
+
+      <div class="concern">
+        <div class="hd"><span class="pill warn"><span class="dot"></span>Warning</span><h3>No automated tests</h3></div>
+        <div class="ref">repo-wide · only <code>scripts/verify-e2e.mts</code> (needs a live tenant)</div>
+        <p>~2,876 lines with zero unit coverage. <code>buildCanvasContent1</code> is a pure function ripe for testing without any network — regressions in canvas shaping would currently go unnoticed until a live run.</p>
+      </div>
+
+      <div class="concern">
+        <div class="hd"><span class="pill warn"><span class="dot"></span>Warning</span><h3>Reliance on Graph beta endpoints</h3></div>
+        <div class="ref">sites.ts:337 (create_site) · sites.ts:357,376,395 (recycle bin)</div>
+        <p>Five tools call <code>.version("beta")</code>. Beta is explicitly unstable and can change or break without notice; these tools may silently regress against a tenant.</p>
+      </div>
+
+      <div class="concern">
+        <div class="hd"><span class="pill info"><span class="dot"></span>Info</span><h3>No throttling / pagination handling</h3></div>
+        <div class="ref">util.ts (no retry) · all <code>list_*</code> tools return <code>res.value</code></div>
+        <p>Graph 429s aren't retried with <code>Retry-After</code>, and list tools return only the first page (no <code>@odata.nextLink</code> follow). Fine for interactive use; surprising at scale.</p>
+      </div>
+
+      <div class="concern">
+        <div class="hd"><span class="pill info"><span class="dot"></span>Info</span><h3>Per-call web resolution; unbounded manifest cache</h3></div>
+        <div class="ref">pages.ts — resolveWeb() &amp; getManifests()</div>
+        <p>Each page op makes an extra Graph call to resolve <code>webUrl</code>. The manifest cache is a process-lifetime <code>Map</code> with no TTL — correct, but won't pick up tenant changes without a restart.</p>
+      </div>
+
+      <div class="concern">
+        <div class="hd"><span class="pill info"><span class="dot"></span>Info</span><h3>Image web part is external-URL only</h3></div>
+        <div class="ref">pages.ts — image case</div>
+        <p>Site-hosted images need <code>siteId/webId/listId/uniqueId</code> metadata; the typed <code>image</code> kind is best-effort for external URLs. Documented, but a sharp edge — library images must go through the <code>standard</code> kind.</p>
+      </div>
+
+      <div class="concern">
+        <div class="hd"><span class="pill info"><span class="dot"></span>Info</span><h3>No LICENSE file</h3></div>
+        <div class="ref">repo root · package.json declares ISC</div>
+        <p>ISC is declared in <code>package.json</code> and the README, but there's no <code>LICENSE</code> file — worth adding before the repo gets traction.</p>
+      </div>
+    </section>
+
+    <section id="recommendations">
+      <h2>Recommendations</h2>
+      <ul class="tight">
+        <li><strong>Add unit tests for <code>buildCanvasContent1</code>.</strong> Pure input → JSON string; highest value, zero infrastructure. Lock in the button-serverProcessedContent and Quick Links shapes so they can't silently regress.</li>
+        <li><strong>Guard the beta endpoints.</strong> Either document them as unstable in the tool descriptions or gate them behind a flag, so a beta change doesn't quietly break <code>create_site</code> / recycle-bin tools.</li>
+        <li><strong>Add 429 retry + optional pagination.</strong> A small wrapper in <code>graph.ts</code> for <code>Retry-After</code>, and a <code>followNextLink</code> option on list tools, would harden it for larger tenants.</li>
+        <li><strong>Cache <code>resolveWeb</code> per site.</strong> Same memoization pattern already used for manifests; removes one Graph round-trip per page op.</li>
+        <li><strong>Add a <code>LICENSE</code> file</strong> matching the declared ISC.</li>
+        <li><strong>Consider PnPjs if page scope grows.</strong> It uses this same REST + CanvasContent1 approach but maintains web-part builders, section handling, and checkout for you — a natural migration if authoring features expand.</li>
+      </ul>
+
+      <div class="callout info">
+        <div class="lbl">Bottom line</div>
+        <p>A focused, well-factored MCP server that does the boring parts cleanly and the hard part (native page web parts) genuinely well. The remaining gaps are about hardening — tests, beta exposure, throttling — not architecture.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const links = [...document.querySelectorAll('nav.toc a')];
+  const map = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const a = map.get(e.target.id);
+        if (a) a.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px', threshold: 0 });
+  document.querySelectorAll('main section').forEach(s => obs.observe(s));
+</script>
+</body>
+</html>
