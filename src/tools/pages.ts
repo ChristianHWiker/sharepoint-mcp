@@ -12,22 +12,43 @@ type Webpart =
   | { kind: "text"; html: string }
   | { kind: "image"; imageUrl: string; altText?: string; caption?: string }
   | { kind: "divider" }
+  | { kind: "spacer" }
   | { kind: "button"; label: string; url: string; alignment?: "left" | "center" | "right" }
   | { kind: "quickLinks"; links: Array<{ title: string; url: string; description?: string }> }
+  | { kind: "embed"; embedCode: string }
+  | { kind: "codeSnippet"; code: string; language?: string }
   | { kind: "standard"; webPartType: string; data: Record<string, unknown> };
+
+/** Section background tint. Maps to the control `emphasis.zoneEmphasis` 0-3. */
+type Background = "none" | "neutral" | "soft" | "strong";
+const BACKGROUND: Record<Background, number> = { none: 0, neutral: 1, soft: 2, strong: 3 };
+const BACKGROUND_BY_INDEX: Background[] = ["none", "neutral", "soft", "strong"];
 
 type Column = { width?: number; webparts: Webpart[] };
 type Section = {
   layout?: "oneColumn" | "twoColumns" | "threeColumns" | "oneThirdLeftColumn" | "oneThirdRightColumn";
+  background?: Background;
   columns: Column[];
 };
 
 // Canonical web part type GUIDs (from the Graph "supported web parts" reference).
+// For parts we resolve by manifest alias (embed/codeSnippet/spacer), these are
+// fallbacks used only if the live `GetClientSideWebParts` manifest is unavailable.
 const WP = {
   button: "0f087d7f-520e-42b7-89c0-496aaf979d58",
   divider: "2161a1c6-db61-4731-b97c-3cdb303f7cbb",
   image: "d1d91016-032f-456d-98a4-721247c305e8",
   quickLinks: "c70391ea-0b10-4ee9-b2b4-006d3fcad0cd",
+  embed: "490d7c76-1bce-4b8d-8c4d-2b1c4a3a8f6e",
+  codeSnippet: "f92bf067-bc19-489e-a556-7fe95f508720",
+  spacer: "8654b779-4886-46d4-8ffb-b5ed960ee986",
+} as const;
+
+/** Web part aliases used to resolve a canonical GUID from the live site manifest. */
+const WP_ALIAS = {
+  embed: "embed",
+  codeSnippet: "codesnippet",
+  spacer: "spacer",
 } as const;
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -43,12 +64,20 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // uses under the hood.)
 // ---------------------------------------------------------------------------
 type WpManifest = {
+  id: string;
   title: string;
   description: string;
   dataVersion: string;
   defaultProperties: Record<string, unknown>;
 };
+// Keyed by both lowercased GUID and lowercased alias, so a web part can be
+// resolved either way. `id` always carries the canonical GUID.
 export type WpManifests = Map<string, WpManifest>;
+
+/** Resolve a web part's canonical GUID from the manifest by alias, else fall back. */
+function resolveWpId(manifests: WpManifests | undefined, alias: string, fallback: string): string {
+  return manifests?.get(alias.toLowerCase())?.id ?? fallback;
+}
 
 function resolveLoc(v: unknown): string {
   if (!v) return "";
@@ -132,6 +161,32 @@ function buildControl(
         description: "Show a divider between content.",
         dataVersion: "2.0",
         properties: {},
+      });
+
+    case "spacer":
+      return assembleWebPart(resolveWpId(manifests, WP_ALIAS.spacer, WP.spacer), position, manifests, {
+        title: "Spacer",
+        description: "Add vertical space between content.",
+        dataVersion: "1.0",
+        properties: {},
+      });
+
+    case "embed":
+      // Embed takes a raw embed string (an <iframe>…</iframe> or oEmbed-able
+      // markup). `embedCode` renders as-is; SharePoint sanitizes it.
+      return assembleWebPart(resolveWpId(manifests, WP_ALIAS.embed, WP.embed), position, manifests, {
+        title: "Embed",
+        description: "Embed content from other sites such as videos and maps.",
+        dataVersion: "1.4",
+        properties: { embedCode: wp.embedCode, shouldScaleWidth: true },
+      });
+
+    case "codeSnippet":
+      return assembleWebPart(resolveWpId(manifests, WP_ALIAS.codeSnippet, WP.codeSnippet), position, manifests, {
+        title: "Code snippet",
+        description: "Display a snippet of code with syntax highlighting.",
+        dataVersion: "1.0",
+        properties: { code: wp.code, language: wp.language ?? "text", wrapLines: false, showLineNumbers: false },
       });
 
     case "button":
@@ -223,16 +278,19 @@ export function buildCanvasContent1(sections: Section[], manifests?: WpManifests
   const controls: Record<string, unknown>[] = [];
   sections.forEach((section, si) => {
     const zoneIndex = si + 1;
+    const zoneEmphasis = BACKGROUND[section.background ?? "none"];
     section.columns.forEach((column, ci) => {
       const sectionFactor = column.width ?? 12;
       column.webparts.forEach((wp, wi) => {
-        controls.push(
-          buildControl(
-            wp,
-            { zoneIndex, sectionIndex: ci + 1, sectionFactor, controlIndex: wi + 1, layoutIndex: 1 },
-            manifests,
-          ),
+        const control = buildControl(
+          wp,
+          { zoneIndex, sectionIndex: ci + 1, sectionFactor, controlIndex: wi + 1, layoutIndex: 1 },
+          manifests,
         );
+        // A section's background is set per-control: every control in the zone
+        // carries the same zoneEmphasis.
+        if (zoneEmphasis) control.emphasis = { zoneEmphasis };
+        controls.push(control);
       });
     });
   });
@@ -243,6 +301,145 @@ function textCanvasContent1(html: string): string {
   return buildCanvasContent1([
     { layout: "oneColumn", columns: [{ width: 12, webparts: [{ kind: "text", html }] }] },
   ]);
+}
+
+// ---------------------------------------------------------------------------
+// CanvasContent1 parser (the inverse of buildCanvasContent1)
+//
+// Parses a stored CanvasContent1 string back into the structured `sections`
+// model so callers can read a page, edit it in place, and feed it straight
+// back to update_page. Known web parts are mapped to their first-class `kind`;
+// anything else round-trips losslessly as a `standard` web part.
+// ---------------------------------------------------------------------------
+// Static GUID→kind map for parts whose GUIDs are canonical and stable. The
+// alias-resolved parts (embed/codeSnippet/spacer) are added on top of this at
+// parse time from the live manifest, so we recognize the tenant's real GUIDs
+// even if our fallback GUID differs.
+const STATIC_GUID_TO_KIND: Record<string, Webpart["kind"]> = {
+  [WP.divider]: "divider",
+  [WP.button]: "button",
+  [WP.image]: "image",
+  [WP.quickLinks]: "quickLinks",
+  [WP.embed]: "embed",
+  [WP.codeSnippet]: "codeSnippet",
+  [WP.spacer]: "spacer",
+};
+
+const lc = (s: unknown) => String(s ?? "").toLowerCase();
+
+function controlToWebpart(control: any, guidToKind: Record<string, Webpart["kind"]>): Webpart {
+  if (control.controlType === 4) return { kind: "text", html: control.innerHTML ?? "" };
+
+  const guid = lc(control.webPartId);
+  const data = control.webPartData ?? {};
+  const props = (data.properties ?? {}) as Record<string, any>;
+  const spc = (data.serverProcessedContent ?? {}) as any;
+  const texts = spc.searchablePlainTexts ?? {};
+  const links = spc.links ?? {};
+  const images = spc.imageSources ?? {};
+  const kind = guidToKind[guid];
+
+  switch (kind) {
+    case "divider":
+      return { kind: "divider" };
+    case "spacer":
+      return { kind: "spacer" };
+    case "button":
+      return {
+        kind: "button",
+        label: texts.label ?? "",
+        url: links.linkUrl ?? "",
+        alignment: lc(props.alignment) as "left" | "center" | "right",
+      };
+    case "image":
+      return {
+        kind: "image",
+        imageUrl: images.imageSource ?? "",
+        altText: props.altText || undefined,
+        caption: props.captionText || undefined,
+      };
+    case "embed":
+      return { kind: "embed", embedCode: props.embedCode ?? "" };
+    case "codeSnippet":
+      return { kind: "codeSnippet", code: props.code ?? "", language: props.language || undefined };
+    case "quickLinks": {
+      const items: any[] = Array.isArray(props.items) ? props.items : [];
+      return {
+        kind: "quickLinks",
+        links: items.map((it, i) => ({
+          title: texts[`items[${i}].title`] ?? "",
+          url: links[`items[${i}].sourceItem.url`] ?? "",
+          description: it.description || undefined,
+        })),
+      };
+    }
+    default:
+      // Unknown / complex web part — preserve it verbatim so it round-trips.
+      return {
+        kind: "standard",
+        webPartType: control.webPartId,
+        data: {
+          title: data.title,
+          description: data.description,
+          dataVersion: data.dataVersion,
+          properties: data.properties,
+          serverProcessedContent: data.serverProcessedContent,
+        },
+      };
+  }
+}
+
+export function parseCanvasContent1(canvas: string, manifests?: WpManifests): Section[] {
+  let controls: any[];
+  try {
+    controls = JSON.parse(canvas || "[]");
+  } catch {
+    return [];
+  }
+
+  // Recognize the tenant's real GUIDs for alias-resolved parts.
+  const guidToKind: Record<string, Webpart["kind"]> = { ...STATIC_GUID_TO_KIND };
+  if (manifests) {
+    for (const [alias, kind] of [
+      [WP_ALIAS.embed, "embed"],
+      [WP_ALIAS.codeSnippet, "codeSnippet"],
+      [WP_ALIAS.spacer, "spacer"],
+    ] as Array<[string, Webpart["kind"]]>) {
+      const id = manifests.get(alias)?.id;
+      if (id) guidToKind[id] = kind;
+    }
+  }
+
+  // Group controls by zone -> column, preserving order. Controls without a
+  // position (e.g. the trailing pageSettingsSlice) are page-level, not content.
+  const zones = new Map<number, Map<number, { factor: number; emphasis: number; items: Array<{ idx: number; ctrl: any }> }>>();
+  for (const ctrl of controls) {
+    const pos = ctrl?.position;
+    if (!pos || typeof pos.zoneIndex !== "number") continue;
+    if (ctrl.controlType !== 3 && ctrl.controlType !== 4) continue; // 3=webpart, 4=text
+    const zi = pos.zoneIndex;
+    const si = pos.sectionIndex ?? 1;
+    if (!zones.has(zi)) zones.set(zi, new Map());
+    const cols = zones.get(zi)!;
+    if (!cols.has(si)) cols.set(si, { factor: pos.sectionFactor ?? 12, emphasis: ctrl.emphasis?.zoneEmphasis ?? 0, items: [] });
+    const col = cols.get(si)!;
+    if (ctrl.emphasis?.zoneEmphasis) col.emphasis = ctrl.emphasis.zoneEmphasis;
+    col.items.push({ idx: pos.controlIndex ?? 0, ctrl });
+  }
+
+  return [...zones.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, cols]) => {
+      const sortedCols = [...cols.entries()].sort((a, b) => a[0] - b[0]);
+      const emphasis = sortedCols.find(([, c]) => c.emphasis)?.[1].emphasis ?? 0;
+      return {
+        background: BACKGROUND_BY_INDEX[emphasis] ?? "none",
+        columns: sortedCols.map(([, c]) => ({
+          width: c.factor,
+          webparts: c.items.sort((a, b) => a.idx - b.idx).map((i) => controlToWebpart(i.ctrl, guidToKind)),
+        })),
+      } satisfies Section;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -296,12 +493,18 @@ async function getManifests(ctx: WebContext): Promise<WpManifests | undefined> {
       let m: any = {};
       try { m = JSON.parse(p.Manifest ?? p.manifest ?? "{}"); } catch { /* ignore */ }
       const entry = m?.preconfiguredEntries?.[0] ?? {};
-      map.set(id, {
+      const manifest: WpManifest = {
+        id,
         title: resolveLoc(entry.title),
         description: resolveLoc(entry.description),
         dataVersion: m?.version ?? "1.0",
         defaultProperties: (entry.properties as Record<string, unknown>) ?? {},
-      });
+      };
+      map.set(id, manifest);
+      // Also index by alias (e.g. "Embed", "CodeSnippet") so we can resolve a
+      // GUID by name without hand-maintaining it.
+      const alias = String(m?.alias ?? "").toLowerCase();
+      if (alias && !map.has(alias)) map.set(alias, manifest);
     }
     manifestCache.set(ctx.webUrl, map);
     return map;
@@ -339,6 +542,10 @@ const sectionsSchema = z
       layout: z
         .enum(["oneColumn", "twoColumns", "threeColumns", "oneThirdLeftColumn", "oneThirdRightColumn"])
         .optional(),
+      background: z
+        .enum(["none", "neutral", "soft", "strong"])
+        .optional()
+        .describe("Section background tint (zoneEmphasis). Defaults to 'none'."),
       columns: z.array(
         z.object({
           width: z.number().int().min(1).max(12).optional(),
@@ -352,6 +559,7 @@ const sectionsSchema = z
                 caption: z.string().optional(),
               }),
               z.object({ kind: z.literal("divider") }),
+              z.object({ kind: z.literal("spacer") }),
               z.object({
                 kind: z.literal("button"),
                 label: z.string(),
@@ -369,6 +577,15 @@ const sectionsSchema = z
                 ),
               }),
               z.object({
+                kind: z.literal("embed"),
+                embedCode: z.string().describe("Raw embed markup, e.g. an <iframe>…</iframe> for a video or map."),
+              }),
+              z.object({
+                kind: z.literal("codeSnippet"),
+                code: z.string(),
+                language: z.string().optional().describe("Syntax-highlight language, e.g. 'javascript', 'csharp'."),
+              }),
+              z.object({
                 kind: z.literal("standard"),
                 webPartType: z.string(),
                 data: z.record(z.string(), z.unknown()),
@@ -381,11 +598,12 @@ const sectionsSchema = z
   )
   .describe(
     "Page canvas: array of horizontal sections. Each section has columns; each column has webparts. " +
-      "Webpart kinds: 'text' (innerHTML rich text), 'image', 'divider', 'button', 'quickLinks', and " +
-      "'standard' (raw web part: pass webPartType GUID + data). Set each column's `width` (1-12) to lay " +
-      "out multi-column sections (e.g. two width-6 columns). Native web parts are authored via the " +
-      "SharePoint REST pages API (CanvasContent1), so button, divider, and quickLinks all work — prefer " +
-      "them over emulating with styled HTML.",
+      "Webpart kinds: 'text' (innerHTML rich text), 'image', 'divider', 'spacer', 'button', 'quickLinks', " +
+      "'embed' (iframe/video/map), 'codeSnippet', and 'standard' (raw web part: pass webPartType GUID + " +
+      "data). Set each column's `width` (1-12) to lay out multi-column sections (e.g. two width-6 columns), " +
+      "and an optional section `background` tint. Native web parts are authored via the SharePoint REST " +
+      "pages API (CanvasContent1), so they all work — prefer them over emulating with styled HTML. To edit " +
+      "a page in place, read it first with get_page_canvas, modify the returned sections, and pass them back.",
   );
 
 // ---------------------------------------------------------------------------
@@ -417,6 +635,28 @@ export function registerPageTools(server: McpServer) {
     },
     wrapTool(async ({ siteId, pageId }: { siteId: string; pageId: string }) => {
       return asJson(await getPageGraph(siteId, pageId));
+    }),
+  );
+
+  server.registerTool(
+    "get_page_canvas",
+    {
+      title: "Get a page's editable canvas",
+      description:
+        "Read a page's layout as the same structured `sections` model that create_page/update_page accept. " +
+        "Use this to edit a page in place: read the canvas, modify the returned sections, then pass them " +
+        "to update_page. Reads the raw CanvasContent1 via SharePoint REST, so it faithfully includes web " +
+        "parts that the Graph reader (get_page) drops.",
+      inputSchema: { siteId: z.string(), pageId: z.string() },
+    },
+    wrapTool(async ({ siteId, pageId }: { siteId: string; pageId: string }) => {
+      const ctx = await resolveWeb(siteId);
+      const intId = await resolvePageIntId(ctx, pageId);
+      const page = await spFetch(ctx, "GET", `sitepages/pages(${intId})?$select=Title,CanvasContent1`);
+      return asJson({
+        title: page?.Title ?? null,
+        sections: parseCanvasContent1(page?.CanvasContent1 ?? "[]", await getManifests(ctx)),
+      });
     }),
   );
 

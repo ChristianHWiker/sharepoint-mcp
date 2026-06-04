@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 loadDotenv({ path: path.resolve(scriptDir, "../.env"), quiet: true });
 
-const { buildCanvasContent1 } = await import("../src/tools/pages.js");
+const { buildCanvasContent1, parseCanvasContent1 } = await import("../src/tools/pages.js");
 const { graphClient } = await import("../src/graph.js");
 const { getSharePointToken } = await import("../src/auth.js");
 
@@ -53,10 +53,10 @@ const api = async (m: string, p: string, b?: any, extra: any = {}) => {
 };
 
 const sections = [
-  { layout: "oneColumn", columns: [{ width: 12, webparts: [{ kind: "text", html: "<h2>E2E test</h2><p>Built by the shipped builder.</p>" }, { kind: "divider" }] }] },
-  { layout: "twoColumns", columns: [
-    { width: 6, webparts: [{ kind: "button", label: "Open ticket", url: "https://example.com/ticket", alignment: "left" }] },
-    { width: 6, webparts: [{ kind: "quickLinks", links: [{ title: "Example", url: "https://example.com" }, { title: "Docs", url: "https://example.com/docs" }] }] },
+  { layout: "oneColumn", background: "neutral", columns: [{ width: 12, webparts: [{ kind: "text", html: "<h2>E2E test</h2><p>Built by the shipped builder.</p>" }, { kind: "divider" }, { kind: "spacer" }] }] },
+  { layout: "twoColumns", background: "strong", columns: [
+    { width: 6, webparts: [{ kind: "button", label: "Open ticket", url: "https://example.com/ticket", alignment: "left" }, { kind: "codeSnippet", code: "console.log('hi')", language: "javascript" }] },
+    { width: 6, webparts: [{ kind: "quickLinks", links: [{ title: "Example", url: "https://example.com" }, { title: "Docs", url: "https://example.com/docs" }] }, { kind: "embed", embedCode: "<iframe src='https://www.youtube.com/embed/dQw4w9WgXcQ'></iframe>" }] },
   ] },
 ];
 
@@ -80,9 +80,18 @@ for (const s of page.canvasLayout.horizontalSections)
       if (w.webPartType === "c70391ea-0b10-4ee9-b2b4-006d3fcad0cd")
         console.log("  QL properties keys:", Object.keys(w.data?.properties ?? {}).join(", "));
 
-// UPDATE (resolve int id from guid, replace body)
+// READ-BACK: fetch raw CanvasContent1 and parse it (the get_page_canvas path).
+// Confirms the round-trip the in-place-edit workflow relies on.
 const found = await api("GET", `sitepages/pages?$select=Id&$filter=UniqueId eq guid'${created.UniqueId}'`);
 const intId = found.value[0].Id;
+const raw = await api("GET", `sitepages/pages(${intId})?$select=Title,CanvasContent1`);
+const parsed = parseCanvasContent1(raw.CanvasContent1 ?? "[]");
+const kinds = parsed.flatMap((s: any) => s.columns.flatMap((c: any) => c.webparts.map((w: any) => w.kind)));
+console.log("CANVAS READ-BACK parsed sections:", parsed.length, " backgrounds:", JSON.stringify(parsed.map((s: any) => s.background)), " kinds:", JSON.stringify(kinds));
+const expected = ["text", "divider", "spacer", "button", "codeSnippet", "quickLinks", "embed"];
+const missing = expected.filter((k) => !kinds.includes(k));
+console.log(missing.length ? `  ⚠ MISSING kinds after round-trip: ${missing.join(", ")}` : "  ✅ all new kinds round-tripped");
+
 await api("POST", `sitepages/pages(${intId})/checkoutpage`);
 await api("POST", `sitepages/pages(${intId})/SavePageAsDraft`, { CanvasContent1: buildCanvasContent1([{ layout: "oneColumn", columns: [{ width: 12, webparts: [{ kind: "text", html: "<p>updated</p>" }] }] }] as any) });
 const page2: any = await graphClient().api(`/sites/${SITE_ID}/pages/${created.UniqueId}/microsoft.graph.sitePage`).expand("canvasLayout").get();
